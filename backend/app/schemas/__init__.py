@@ -6,6 +6,9 @@ from app.schemas.agents import (
     ImpactReport,
     ParamValue,
     RootCauseReport,
+    ActionProposalDraft,
+    ImpactReportDraft,
+    RootCauseReportDraft,
 )
 from app.schemas.base import ContractModel
 from app.schemas.enums import (
@@ -78,4 +81,7 @@ __all__ = [
     "Thresholds",
     "ValidationResult",
     "Verdict",
+    "ActionProposalDraft",
+    "ImpactReportDraft",
+    "RootCauseReportDraft",
 ]

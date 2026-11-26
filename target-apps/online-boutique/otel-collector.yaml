@@ -8,14 +8,20 @@ processors:
   batch: {}
 
 exporters:
-  # Prints a one-line count of received traces to the container log.
-  # Step 5c replaces this with an exporter that sends traces to the SENTINEL backend.
+  # Prints a one-line count of received traces to the container log (handy for debugging).
   debug:
     verbosity: basic
+  # Sends traces to the SENTINEL backend as OTLP/JSON.
+  otlphttp/sentinel:
+    traces_endpoint: http://host.docker.internal:8000/api/v1/ingest/traces
+    encoding: json
+    compression: none
+    headers:
+      x-sentinel-app: online-boutique
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlphttp/sentinel]

@@ -3,7 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import applications, health
+from app.api import applications, health, ingest
 from app.config import settings
 from app.errors import AppError
 
@@ -20,6 +20,7 @@ app.add_middleware(
 API_PREFIX = "/api/v1"
 app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(applications.router, prefix=API_PREFIX)
+app.include_router(ingest.router, prefix=API_PREFIX)
 
 
 def _error(status: int, code: str, message: str) -> JSONResponse:
