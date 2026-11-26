@@ -1,0 +1,37 @@
+app: sample-shop
+version: 1
+description: Small sample application used to test the adapter loader
+services:
+  - name: frontend
+    container: frontend
+    type: stateless
+    critical: false
+    health: /healthz
+    faults: [crash, latency]
+  - name: cartservice
+    container: cartservice
+    type: stateless
+    critical: false
+    health: /healthz
+    faults: [crash, latency, timeout]
+  - name: checkoutservice
+    container: checkoutservice
+    type: stateless
+    critical: false
+    health: /healthz
+    faults: [crash, latency]
+  - name: redis-cart
+    container: redis-cart
+    type: stateful
+    critical: true
+    health: tcp://redis-cart:6379
+    faults: [connection_failure]
+declared_dependencies:
+  - from: frontend
+    to: cartservice
+  - from: frontend
+    to: checkoutservice
+  - from: checkoutservice
+    to: cartservice
+  - from: cartservice
+    to: redis-cart
