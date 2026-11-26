@@ -1,0 +1,113 @@
+# Online Boutique v0.10.4, translated from the official Kubernetes manifest.
+# Restart policy is left at the default ("no") on purpose: a crash experiment
+# must stay down until an agent or a human recovers the service.
+name: online-boutique
+
+services:
+  frontend:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/frontend:v0.10.4
+    ports:
+      - "8081:8080"
+    environment:
+      PORT: "8080"
+      PRODUCT_CATALOG_SERVICE_ADDR: "productcatalogservice:3550"
+      CURRENCY_SERVICE_ADDR: "currencyservice:7000"
+      CART_SERVICE_ADDR: "cartservice:7070"
+      RECOMMENDATION_SERVICE_ADDR: "recommendationservice:8080"
+      SHIPPING_SERVICE_ADDR: "shippingservice:50051"
+      CHECKOUT_SERVICE_ADDR: "checkoutservice:5050"
+      AD_SERVICE_ADDR: "adservice:9555"
+      SHOPPING_ASSISTANT_SERVICE_ADDR: "shoppingassistantservice:80"
+      ENABLE_PROFILER: "0"
+    depends_on:
+      - productcatalogservice
+      - currencyservice
+      - cartservice
+      - recommendationservice
+      - shippingservice
+      - checkoutservice
+      - adservice
+
+  cartservice:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/cartservice:v0.10.4
+    environment:
+      REDIS_ADDR: "redis-cart:6379"
+    depends_on:
+      - redis-cart
+
+  redis-cart:
+    image: redis:alpine
+
+  productcatalogservice:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/productcatalogservice:v0.10.4
+    environment:
+      PORT: "3550"
+      DISABLE_PROFILER: "1"
+
+  currencyservice:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/currencyservice:v0.10.4
+    environment:
+      PORT: "7000"
+      DISABLE_PROFILER: "1"
+
+  paymentservice:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/paymentservice:v0.10.4
+    environment:
+      PORT: "50051"
+      DISABLE_PROFILER: "1"
+
+  shippingservice:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/shippingservice:v0.10.4
+    environment:
+      PORT: "50051"
+      DISABLE_PROFILER: "1"
+
+  emailservice:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/emailservice:v0.10.4
+    environment:
+      PORT: "8080"
+      DISABLE_PROFILER: "1"
+
+  checkoutservice:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/checkoutservice:v0.10.4
+    environment:
+      PORT: "5050"
+      PRODUCT_CATALOG_SERVICE_ADDR: "productcatalogservice:3550"
+      SHIPPING_SERVICE_ADDR: "shippingservice:50051"
+      PAYMENT_SERVICE_ADDR: "paymentservice:50051"
+      EMAIL_SERVICE_ADDR: "emailservice:8080"
+      CURRENCY_SERVICE_ADDR: "currencyservice:7000"
+      CART_SERVICE_ADDR: "cartservice:7070"
+    depends_on:
+      - productcatalogservice
+      - shippingservice
+      - paymentservice
+      - emailservice
+      - currencyservice
+      - cartservice
+
+  recommendationservice:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/recommendationservice:v0.10.4
+    environment:
+      PORT: "8080"
+      PRODUCT_CATALOG_SERVICE_ADDR: "productcatalogservice:3550"
+      DISABLE_PROFILER: "1"
+    depends_on:
+      - productcatalogservice
+
+  adservice:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/adservice:v0.10.4
+    environment:
+      PORT: "9555"
+
+  # Traffic generator. Not started by default; enable with:
+  #   docker compose --profile load up -d loadgenerator
+  loadgenerator:
+    image: us-central1-docker.pkg.dev/google-samples/microservices-demo/loadgenerator:v0.10.4
+    profiles: ["load"]
+    environment:
+      FRONTEND_ADDR: "frontend:8080"
+      USERS: "10"
+      RATE: "1"
+    depends_on:
+      - frontend

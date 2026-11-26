@@ -1,0 +1,101 @@
+app: online-boutique
+version: 1
+description: Google Online Boutique v0.10.4 running in Docker Compose
+services:
+  - name: frontend
+    container: frontend
+    type: stateless
+    critical: false
+    health: /_healthz
+    faults: [crash, latency]
+  - name: cartservice
+    container: cartservice
+    type: stateless
+    critical: false
+    health: tcp://cartservice:7070
+    faults: [crash, latency, timeout]
+  - name: productcatalogservice
+    container: productcatalogservice
+    type: stateless
+    critical: false
+    health: tcp://productcatalogservice:3550
+    faults: [crash, latency, timeout]
+  - name: currencyservice
+    container: currencyservice
+    type: stateless
+    critical: false
+    health: tcp://currencyservice:7000
+    faults: [crash, latency]
+  - name: paymentservice
+    container: paymentservice
+    type: stateless
+    critical: true
+    health: tcp://paymentservice:50051
+    faults: [crash, latency]
+  - name: shippingservice
+    container: shippingservice
+    type: stateless
+    critical: false
+    health: tcp://shippingservice:50051
+    faults: [crash, latency]
+  - name: emailservice
+    container: emailservice
+    type: stateless
+    critical: false
+    health: tcp://emailservice:8080
+    faults: [crash, latency]
+  - name: checkoutservice
+    container: checkoutservice
+    type: stateless
+    critical: true
+    health: tcp://checkoutservice:5050
+    faults: [crash, latency, timeout]
+  - name: recommendationservice
+    container: recommendationservice
+    type: stateless
+    critical: false
+    health: tcp://recommendationservice:8080
+    faults: [crash, latency]
+  - name: adservice
+    container: adservice
+    type: stateless
+    critical: false
+    health: tcp://adservice:9555
+    faults: [crash, latency]
+  - name: redis-cart
+    container: redis-cart
+    type: stateful
+    critical: true
+    health: tcp://redis-cart:6379
+    faults: [connection_failure]
+declared_dependencies:
+  - from: frontend
+    to: productcatalogservice
+  - from: frontend
+    to: currencyservice
+  - from: frontend
+    to: cartservice
+  - from: frontend
+    to: recommendationservice
+  - from: frontend
+    to: shippingservice
+  - from: frontend
+    to: checkoutservice
+  - from: frontend
+    to: adservice
+  - from: checkoutservice
+    to: productcatalogservice
+  - from: checkoutservice
+    to: shippingservice
+  - from: checkoutservice
+    to: paymentservice
+  - from: checkoutservice
+    to: emailservice
+  - from: checkoutservice
+    to: currencyservice
+  - from: checkoutservice
+    to: cartservice
+  - from: cartservice
+    to: redis-cart
+  - from: recommendationservice
+    to: productcatalogservice
