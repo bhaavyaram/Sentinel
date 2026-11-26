@@ -1,0 +1,544 @@
+﻿# ===== adapter.py =====
+from typing import Literal
+
+from pydantic import ConfigDict, Field, field_validator, model_validator
+
+from app.schemas.base import ContractModel
+from app.schemas.enums import FaultType, ServiceType
+
+SLUG_PATTERN = r"^[a-z0-9][a-z0-9_-]*$"
+HEALTH_PREFIXES = ("/", "tcp://", "http://", "https://")
+
+
+class AdapterService(ContractModel):
+    name: str = Field(pattern=SLUG_PATTERN)
+    container: str = Field(min_length=1)  # docker compose service name
+    type: ServiceType
+    critical: bool = False
+    health: str | None = None
+    faults: list[FaultType] = Field(default_factory=list)
+
+    @field_validator("health")
+    @classmethod
+    def health_must_be_probeable(cls, v: str | None) -> str | None:
+        if v is not None and not v.startswith(HEALTH_PREFIXES):
+            raise ValueError(
+                "health must be an HTTP path starting with '/', an http(s):// URL, or a 'tcp://host:port' address"
+            )
+        return v
+
+
+class DeclaredDependency(ContractModel):
+    # "from" is a Python keyword, so the field is from_ and the file key is "from".
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_: str = Field(alias="from")
+    to: str
+
+
+class AdapterFile(ContractModel):
+    app: str = Field(pattern=SLUG_PATTERN)
+    version: Literal[1] = 1
+    description: str | None = None
+    compose_project: str | None = Field(default=None, pattern=SLUG_PATTERN)
+    services: list[AdapterService] = Field(min_length=1)
+    declared_dependencies: list[DeclaredDependency] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def check_references(self) -> "AdapterFile":
+        names = [s.name for s in self.services]
+        duplicates = {n for n in names if names.count(n) > 1}
+        if duplicates:
+            raise ValueError(f"duplicate service names: {sorted(duplicates)}")
+        known = set(names)
+        for dep in self.declared_dependencies:
+            for end in (dep.from_, dep.to):
+                if end not in known:
+                    raise ValueError(f"declared dependency references unknown service '{end}'")
+        return self
+# ===== agents.py =====
+from uuid import UUID, uuid4
+
+from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr
+
+from app.schemas.base import ContractModel
+from app.schemas.enums import ActionType, AgentRole
+
+# Contracts: parameters are Record<string, string | number | boolean>.
+ParamValue = StrictBool | StrictInt | StrictFloat | StrictStr
+
+
+class ActionProposal(ContractModel):
+    proposal_id: UUID
+    incident_id: UUID
+    agent: AgentRole
+    action: ActionType
+    target_service: str
+    parameters: dict[str, ParamValue] = Field(default_factory=dict)
+    rationale: str  # display only; the gateway never evaluates it
+    evidence_refs: list[UUID] = Field(default_factory=list)  # incident_event ids
+
+
+class Hypothesis(ContractModel):
+    service: str
+    cause: str
+    confidence: float = Field(ge=0, le=1)
+    evidence_refs: list[UUID] = Field(default_factory=list)
+
+
+class RootCauseReport(ContractModel):
+    incident_id: UUID
+    hypotheses: list[Hypothesis]
+
+
+class CandidateAction(ContractModel):
+    action: ActionType
+    target_service: str
+    blast_radius: list[str]
+
+
+class ImpactReport(ContractModel):
+    incident_id: UUID
+    affected_services: list[str]
+    candidate_actions: list[CandidateAction]
+    summary: str
+
+
+# --- Drafts (Contracts v0.2 section 3) ---------------------------------------
+# The model returns a draft. The orchestrator adds the IDs, so an LLM never invents them.
+
+
+class ActionProposalDraft(ContractModel):
+    action: ActionType
+    target_service: str
+    parameters: dict[str, ParamValue] = Field(default_factory=dict)
+    rationale: str
+    evidence_refs: list[UUID] = Field(default_factory=list)
+
+    def finalize(self, incident_id: UUID, agent: AgentRole) -> ActionProposal:
+        return ActionProposal(
+            proposal_id=uuid4(),
+            incident_id=incident_id,
+            agent=agent,
+            **self.model_dump(),
+        )
+
+
+class RootCauseReportDraft(ContractModel):
+    hypotheses: list[Hypothesis]
+
+    def finalize(self, incident_id: UUID) -> RootCauseReport:
+        return RootCauseReport(incident_id=incident_id, **self.model_dump())
+
+
+class ImpactReportDraft(ContractModel):
+    affected_services: list[str]
+    candidate_actions: list[CandidateAction]
+    summary: str
+
+    def finalize(self, incident_id: UUID) -> ImpactReport:
+        return ImpactReport(incident_id=incident_id, **self.model_dump())
+# ===== applications.py =====
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
+
+from app.schemas.base import ContractModel
+from app.schemas.enums import FaultType, ServiceHealth, ServiceType
+
+
+class ApplicationSummary(ContractModel):
+    id: UUID
+    name: str
+    status: str
+    created_at: datetime
+    service_count: int
+
+
+class MapNode(ContractModel):
+    name: str
+    type: ServiceType
+    critical: bool
+    health_endpoint: str | None
+    health: ServiceHealth
+
+
+class MapEdge(ContractModel):
+    source: str
+    target: str
+    evidence: Literal["trace", "declared"]
+
+
+class ApplicationMap(ContractModel):
+    application_id: UUID
+    nodes: list[MapNode]
+    edges: list[MapEdge]
+
+
+class AvailableExperiment(ContractModel):
+    service: str
+    fault_type: FaultType
+
+
+class AvailableExperiments(ContractModel):
+    application_id: UUID
+    experiments: list[AvailableExperiment]
+# ===== base.py =====
+from pydantic import BaseModel, ConfigDict
+
+
+class ContractModel(BaseModel):
+    """Base for every contract model: unknown fields are rejected, never ignored."""
+
+    model_config = ConfigDict(extra="forbid")
+# ===== enums.py =====
+from enum import Enum
+
+
+class AgentRole(str, Enum):
+    monitor = "monitor"
+    investigator = "investigator"
+    impact = "impact"
+    recovery = "recovery"
+    validator = "validator"
+
+
+class Actor(str, Enum):
+    monitor = "monitor"
+    investigator = "investigator"
+    impact = "impact"
+    recovery = "recovery"
+    validator = "validator"
+    human = "human"
+    system = "system"
+
+
+class ActionType(str, Enum):
+    restart = "restart"
+    rollback = "rollback"
+    scale = "scale"
+    reset_connection_pool = "reset_connection_pool"
+    modify_config = "modify_config"
+    touch_database = "touch_database"
+    inject_fault = "inject_fault"
+    clear_fault = "clear_fault"
+
+
+class FaultType(str, Enum):
+    crash = "crash"
+    latency = "latency"
+    timeout = "timeout"
+    connection_failure = "connection_failure"
+
+
+class Verdict(str, Enum):
+    allow = "allow"
+    block = "block"
+    needs_approval = "needs_approval"
+
+
+class PermissionLevel(str, Enum):
+    allow = "allow"
+    needs_approval = "needs_approval"
+    block = "block"
+
+
+class ServiceType(str, Enum):
+    stateless = "stateless"
+    stateful = "stateful"
+
+
+class ServiceHealth(str, Enum):
+    healthy = "healthy"
+    degraded = "degraded"
+    down = "down"
+    unknown = "unknown"
+
+
+class Severity(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
+
+
+class IncidentStatus(str, Enum):
+    open = "open"
+    investigating = "investigating"
+    awaiting_approval = "awaiting_approval"
+    recovering = "recovering"
+    validating = "validating"
+    resolved = "resolved"
+    failed = "failed"
+
+
+class ValidationResult(str, Enum):
+    recovered = "recovered"
+    partially_recovered = "partially_recovered"
+    failed = "failed"
+
+
+class ApprovalDecision(str, Enum):
+    approved = "approved"
+    denied = "denied"
+    timed_out = "timed_out"
+
+
+class ReasonCode(str, Enum):
+    chaos_requires_human = "chaos_requires_human"
+    protected_resource = "protected_resource"
+    no_rule = "no_rule"
+    matrix_block = "matrix_block"
+    matrix_needs_approval = "matrix_needs_approval"
+    service_override = "service_override"
+    risk_threshold = "risk_threshold"
+    allowed = "allowed"
+
+
+class PolicyPreset(str, Enum):
+    strict = "strict"
+    balanced = "balanced"
+    permissive = "permissive"
+    custom = "custom"
+
+
+class EventType(str, Enum):
+    experiment_started = "experiment_started"
+    experiment_ended = "experiment_ended"
+    service_health_changed = "service_health_changed"
+    incident_opened = "incident_opened"
+    incident_status_changed = "incident_status_changed"
+    agent_step = "agent_step"
+    proposal_created = "proposal_created"
+    gateway_decision = "gateway_decision"
+    approval_requested = "approval_requested"
+    approval_decided = "approval_decided"
+    action_executed = "action_executed"
+    validation_completed = "validation_completed"
+    postmortem_ready = "postmortem_ready"
+    policy_changed = "policy_changed"
+
+
+# Contracts section 1: tool -> action mapping.
+# modify_config and touch_database have no tool yet, so any future tool is blocked by default.
+TOOL_ACTION_MAP: dict[str, ActionType] = {
+    "restart_service": ActionType.restart,
+    "rollback_deployment": ActionType.rollback,
+    "scale_service": ActionType.scale,
+    "reset_connection_pool": ActionType.reset_connection_pool,
+    "inject_crash": ActionType.inject_fault,
+    "inject_latency": ActionType.inject_fault,
+    "inject_timeout": ActionType.inject_fault,
+    "break_db_connection": ActionType.inject_fault,
+    "clear_fault": ActionType.clear_fault,
+}
+
+# Contracts section 6: chaos tools may only be called with initiated_by_human = true.
+CHAOS_TOOLS: frozenset[str] = frozenset(
+    {
+        "inject_crash",
+        "inject_latency",
+        "inject_timeout",
+        "break_db_connection",
+        "clear_fault",
+    }
+)
+# ===== events.py =====
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from pydantic import Field
+
+from app.schemas.base import ContractModel
+from app.schemas.enums import Actor, EventType
+
+
+class SentinelEvent(ContractModel):
+    event_id: UUID
+    ts: datetime
+    application_id: UUID
+    incident_id: UUID | None = None
+    actor: Actor
+    type: EventType
+    payload: dict[str, Any] = Field(default_factory=dict)
+    policy_version: int | None = None
+# ===== gateway.py =====
+from uuid import UUID
+
+from pydantic import Field
+
+from app.schemas.agents import ParamValue
+from app.schemas.base import ContractModel
+from app.schemas.enums import ActionType, Actor, ReasonCode, Verdict
+
+
+class GatewayRequest(ContractModel):
+    request_id: UUID
+    incident_id: UUID | None = None  # null for dashboard-initiated chaos
+    caller: Actor
+    tool: str
+    action: ActionType
+    target_service: str
+    parameters: dict[str, ParamValue] = Field(default_factory=dict)
+    initiated_by_human: bool  # true only for calls from a dashboard user action
+    dry_run: bool  # true for the policy test panel; never executes
+
+
+class BlastRadius(ContractModel):
+    affected_services: list[str]
+    dependents_count: int = Field(ge=0)
+
+
+class GatewayDecision(ContractModel):
+    request_id: UUID
+    verdict: Verdict
+    reason_code: ReasonCode
+    reason: str  # plain language, shown in the UI
+    blast_radius: BlastRadius
+    risk_score: int = Field(ge=0, le=100)
+    matched_rules: list[str] = Field(default_factory=list)
+    policy_version: int = Field(ge=1)
+    approval_id: UUID | None = None  # set when verdict is needs_approval
+# ===== policy.py =====
+from datetime import datetime
+from typing import Literal
+
+from pydantic import Field
+
+from app.schemas.base import ContractModel
+from app.schemas.enums import ActionType, AgentRole, PermissionLevel, PolicyPreset
+
+
+class ServiceRule(ContractModel):
+    service: str
+    tags: list[Literal["stateful", "critical"]] = Field(default_factory=list)
+    overrides: dict[ActionType, PermissionLevel] = Field(default_factory=dict)
+
+
+class Thresholds(ContractModel):
+    max_affected_services: int = Field(ge=0)
+    max_dependents: int = Field(ge=0)
+    approval_risk_score: int = Field(ge=0, le=100)
+
+
+class ProtectedPair(ContractModel):
+    service: str
+    action: ActionType
+
+
+class Protected(ContractModel):
+    services: list[str] = Field(default_factory=list)
+    actions: list[ActionType] = Field(default_factory=list)
+    pairs: list[ProtectedPair] = Field(default_factory=list)
+
+
+class ApprovalSettings(ContractModel):
+    approver_role: str = Field(min_length=1)
+    timeout_seconds: int = Field(gt=0)
+    on_timeout: Literal["deny"]  # can only be deny (invariant 6)
+
+
+class PolicyBody(ContractModel):
+    name: str = Field(min_length=1)
+    preset: PolicyPreset
+    # A missing matrix entry means block (invariant 3).
+    matrix: dict[AgentRole, dict[ActionType, PermissionLevel]] = Field(default_factory=dict)
+    service_rules: list[ServiceRule] = Field(default_factory=list)
+    thresholds: Thresholds
+    protected: Protected
+    approval: ApprovalSettings
+
+
+class Policy(PolicyBody):
+    version: int = Field(ge=1)
+    created_by: str
+    created_at: datetime
+# ===== __init__.py =====
+from app.schemas.adapter import AdapterFile, AdapterService, DeclaredDependency
+from app.schemas.agents import (
+    ActionProposal,
+    CandidateAction,
+    Hypothesis,
+    ImpactReport,
+    ParamValue,
+    RootCauseReport,
+    ActionProposalDraft,
+    ImpactReportDraft,
+    RootCauseReportDraft,
+)
+from app.schemas.base import ContractModel
+from app.schemas.enums import (
+    CHAOS_TOOLS,
+    TOOL_ACTION_MAP,
+    ActionType,
+    Actor,
+    AgentRole,
+    ApprovalDecision,
+    EventType,
+    FaultType,
+    IncidentStatus,
+    PermissionLevel,
+    PolicyPreset,
+    ReasonCode,
+    ServiceHealth,
+    ServiceType,
+    Severity,
+    ValidationResult,
+    Verdict,
+)
+from app.schemas.events import SentinelEvent
+from app.schemas.gateway import BlastRadius, GatewayDecision, GatewayRequest
+from app.schemas.policy import (
+    ApprovalSettings,
+    Policy,
+    PolicyBody,
+    Protected,
+    ProtectedPair,
+    ServiceRule,
+    Thresholds,
+)
+
+__all__ = [
+    "CHAOS_TOOLS",
+    "TOOL_ACTION_MAP",
+    "ActionProposal",
+    "ActionType",
+    "Actor",
+    "AdapterFile",
+    "AdapterService",
+    "AgentRole",
+    "ApprovalDecision",
+    "ApprovalSettings",
+    "BlastRadius",
+    "CandidateAction",
+    "ContractModel",
+    "DeclaredDependency",
+    "EventType",
+    "FaultType",
+    "GatewayDecision",
+    "GatewayRequest",
+    "Hypothesis",
+    "ImpactReport",
+    "IncidentStatus",
+    "ParamValue",
+    "PermissionLevel",
+    "Policy",
+    "PolicyBody",
+    "PolicyPreset",
+    "Protected",
+    "ProtectedPair",
+    "ReasonCode",
+    "RootCauseReport",
+    "SentinelEvent",
+    "ServiceHealth",
+    "ServiceRule",
+    "ServiceType",
+    "Severity",
+    "Thresholds",
+    "ValidationResult",
+    "Verdict",
+    "ActionProposalDraft",
+    "ImpactReportDraft",
+    "RootCauseReportDraft",
+]
