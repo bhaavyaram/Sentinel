@@ -1,25 +1,49 @@
 # Online Boutique v0.10.4, translated from the official Kubernetes manifest.
 # Restart policy is left at the default ("no") on purpose: a crash experiment
 # must stay down until an agent or a human recovers the service.
+#
+# Traffic between services goes through Toxiproxy (toxiproxy:21000-21010) so
+# network faults can be injected. Every service port is also published on
+# 127.0.0.1:22000-22010 for health probes from the SENTINEL backend.
 name: online-boutique
 
 services:
+  opentelemetrycollector:
+    image: otel/opentelemetry-collector:0.116.1
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes:
+      - ./toxiproxy.json:/config/toxiproxy.json:ro
+    ports:
+      - "127.0.0.1:8474:8474"    # Toxiproxy control API
+      - "127.0.0.1:8081:21000"   # the shop, through the frontend proxy
+
   frontend:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/frontend:v0.10.4
     ports:
-      - "8081:8080"
+      - "127.0.0.1:22000:8080"
     environment:
       PORT: "8080"
-      PRODUCT_CATALOG_SERVICE_ADDR: "productcatalogservice:3550"
-      CURRENCY_SERVICE_ADDR: "currencyservice:7000"
-      CART_SERVICE_ADDR: "cartservice:7070"
-      RECOMMENDATION_SERVICE_ADDR: "recommendationservice:8080"
-      SHIPPING_SERVICE_ADDR: "shippingservice:50051"
-      CHECKOUT_SERVICE_ADDR: "checkoutservice:5050"
-      AD_SERVICE_ADDR: "adservice:9555"
+      PRODUCT_CATALOG_SERVICE_ADDR: "toxiproxy:21002"
+      CURRENCY_SERVICE_ADDR: "toxiproxy:21003"
+      CART_SERVICE_ADDR: "toxiproxy:21001"
+      RECOMMENDATION_SERVICE_ADDR: "toxiproxy:21008"
+      SHIPPING_SERVICE_ADDR: "toxiproxy:21005"
+      CHECKOUT_SERVICE_ADDR: "toxiproxy:21007"
+      AD_SERVICE_ADDR: "toxiproxy:21009"
       SHOPPING_ASSISTANT_SERVICE_ADDR: "shoppingassistantservice:80"
       ENABLE_PROFILER: "0"
+      COLLECTOR_SERVICE_ADDR: "opentelemetrycollector:4317"
+      OTEL_SERVICE_NAME: "frontend"
+      ENABLE_TRACING: "1"
     depends_on:
+      - toxiproxy
+      - opentelemetrycollector
       - productcatalogservice
       - currencyservice
       - cartservice
@@ -30,55 +54,97 @@ services:
 
   cartservice:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/cartservice:v0.10.4
+    ports:
+      - "127.0.0.1:22001:7070"
     environment:
-      REDIS_ADDR: "redis-cart:6379"
+      REDIS_ADDR: "toxiproxy:21010"
     depends_on:
+      - toxiproxy
       - redis-cart
 
   redis-cart:
     image: redis:alpine
+    ports:
+      - "127.0.0.1:22010:6379"
 
   productcatalogservice:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/productcatalogservice:v0.10.4
+    ports:
+      - "127.0.0.1:22002:3550"
     environment:
       PORT: "3550"
       DISABLE_PROFILER: "1"
+      COLLECTOR_SERVICE_ADDR: "opentelemetrycollector:4317"
+      OTEL_SERVICE_NAME: "productcatalogservice"
+      ENABLE_TRACING: "1"
+    depends_on:
+      - opentelemetrycollector
 
   currencyservice:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/currencyservice:v0.10.4
+    ports:
+      - "127.0.0.1:22003:7000"
     environment:
       PORT: "7000"
       DISABLE_PROFILER: "1"
+      COLLECTOR_SERVICE_ADDR: "opentelemetrycollector:4317"
+      OTEL_SERVICE_NAME: "currencyservice"
+      ENABLE_TRACING: "1"
+    depends_on:
+      - opentelemetrycollector
 
   paymentservice:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/paymentservice:v0.10.4
+    ports:
+      - "127.0.0.1:22004:50051"
     environment:
       PORT: "50051"
       DISABLE_PROFILER: "1"
+      COLLECTOR_SERVICE_ADDR: "opentelemetrycollector:4317"
+      OTEL_SERVICE_NAME: "paymentservice"
+      ENABLE_TRACING: "1"
+    depends_on:
+      - opentelemetrycollector
 
   shippingservice:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/shippingservice:v0.10.4
+    ports:
+      - "127.0.0.1:22005:50051"
     environment:
       PORT: "50051"
       DISABLE_PROFILER: "1"
 
   emailservice:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/emailservice:v0.10.4
+    ports:
+      - "127.0.0.1:22006:8080"
     environment:
       PORT: "8080"
       DISABLE_PROFILER: "1"
+      COLLECTOR_SERVICE_ADDR: "opentelemetrycollector:4317"
+      OTEL_SERVICE_NAME: "emailservice"
+      ENABLE_TRACING: "1"
+    depends_on:
+      - opentelemetrycollector
 
   checkoutservice:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/checkoutservice:v0.10.4
+    ports:
+      - "127.0.0.1:22007:5050"
     environment:
       PORT: "5050"
-      PRODUCT_CATALOG_SERVICE_ADDR: "productcatalogservice:3550"
-      SHIPPING_SERVICE_ADDR: "shippingservice:50051"
-      PAYMENT_SERVICE_ADDR: "paymentservice:50051"
-      EMAIL_SERVICE_ADDR: "emailservice:8080"
-      CURRENCY_SERVICE_ADDR: "currencyservice:7000"
-      CART_SERVICE_ADDR: "cartservice:7070"
+      PRODUCT_CATALOG_SERVICE_ADDR: "toxiproxy:21002"
+      SHIPPING_SERVICE_ADDR: "toxiproxy:21005"
+      PAYMENT_SERVICE_ADDR: "toxiproxy:21004"
+      EMAIL_SERVICE_ADDR: "toxiproxy:21006"
+      CURRENCY_SERVICE_ADDR: "toxiproxy:21003"
+      CART_SERVICE_ADDR: "toxiproxy:21001"
+      COLLECTOR_SERVICE_ADDR: "opentelemetrycollector:4317"
+      OTEL_SERVICE_NAME: "checkoutservice"
+      ENABLE_TRACING: "1"
     depends_on:
+      - toxiproxy
+      - opentelemetrycollector
       - productcatalogservice
       - shippingservice
       - paymentservice
@@ -88,15 +154,24 @@ services:
 
   recommendationservice:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/recommendationservice:v0.10.4
+    ports:
+      - "127.0.0.1:22008:8080"
     environment:
       PORT: "8080"
-      PRODUCT_CATALOG_SERVICE_ADDR: "productcatalogservice:3550"
+      PRODUCT_CATALOG_SERVICE_ADDR: "toxiproxy:21002"
       DISABLE_PROFILER: "1"
+      COLLECTOR_SERVICE_ADDR: "opentelemetrycollector:4317"
+      OTEL_SERVICE_NAME: "recommendationservice"
+      ENABLE_TRACING: "1"
     depends_on:
+      - toxiproxy
+      - opentelemetrycollector
       - productcatalogservice
 
   adservice:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/adservice:v0.10.4
+    ports:
+      - "127.0.0.1:22009:9555"
     environment:
       PORT: "9555"
 
@@ -106,8 +181,9 @@ services:
     image: us-central1-docker.pkg.dev/google-samples/microservices-demo/loadgenerator:v0.10.4
     profiles: ["load"]
     environment:
-      FRONTEND_ADDR: "frontend:8080"
+      FRONTEND_ADDR: "toxiproxy:21000"
       USERS: "10"
       RATE: "1"
     depends_on:
+      - toxiproxy
       - frontend

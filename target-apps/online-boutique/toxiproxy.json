@@ -1,0 +1,13 @@
+[
+  { "name": "frontend", "listen": "0.0.0.0:21000", "upstream": "frontend:8080", "enabled": true },
+  { "name": "cartservice", "listen": "0.0.0.0:21001", "upstream": "cartservice:7070", "enabled": true },
+  { "name": "productcatalogservice", "listen": "0.0.0.0:21002", "upstream": "productcatalogservice:3550", "enabled": true },
+  { "name": "currencyservice", "listen": "0.0.0.0:21003", "upstream": "currencyservice:7000", "enabled": true },
+  { "name": "paymentservice", "listen": "0.0.0.0:21004", "upstream": "paymentservice:50051", "enabled": true },
+  { "name": "shippingservice", "listen": "0.0.0.0:21005", "upstream": "shippingservice:50051", "enabled": true },
+  { "name": "emailservice", "listen": "0.0.0.0:21006", "upstream": "emailservice:8080", "enabled": true },
+  { "name": "checkoutservice", "listen": "0.0.0.0:21007", "upstream": "checkoutservice:5050", "enabled": true },
+  { "name": "recommendationservice", "listen": "0.0.0.0:21008", "upstream": "recommendationservice:8080", "enabled": true },
+  { "name": "adservice", "listen": "0.0.0.0:21009", "upstream": "adservice:9555", "enabled": true },
+  { "name": "redis-cart", "listen": "0.0.0.0:21010", "upstream": "redis-cart:6379", "enabled": true }
+]

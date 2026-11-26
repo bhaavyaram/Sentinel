@@ -1,72 +1,73 @@
 app: online-boutique
 version: 1
 description: Google Online Boutique v0.10.4 running in Docker Compose
+compose_project: online-boutique
 services:
   - name: frontend
     container: frontend
     type: stateless
     critical: false
-    health: /_healthz
+    health: http://localhost:22000/_healthz
     faults: [crash, latency]
   - name: cartservice
     container: cartservice
     type: stateless
     critical: false
-    health: tcp://cartservice:7070
+    health: tcp://localhost:22001
     faults: [crash, latency, timeout]
   - name: productcatalogservice
     container: productcatalogservice
     type: stateless
     critical: false
-    health: tcp://productcatalogservice:3550
+    health: tcp://localhost:22002
     faults: [crash, latency, timeout]
   - name: currencyservice
     container: currencyservice
     type: stateless
     critical: false
-    health: tcp://currencyservice:7000
+    health: tcp://localhost:22003
     faults: [crash, latency]
   - name: paymentservice
     container: paymentservice
     type: stateless
     critical: true
-    health: tcp://paymentservice:50051
+    health: tcp://localhost:22004
     faults: [crash, latency]
   - name: shippingservice
     container: shippingservice
     type: stateless
     critical: false
-    health: tcp://shippingservice:50051
+    health: tcp://localhost:22005
     faults: [crash, latency]
   - name: emailservice
     container: emailservice
     type: stateless
     critical: false
-    health: tcp://emailservice:8080
+    health: tcp://localhost:22006
     faults: [crash, latency]
   - name: checkoutservice
     container: checkoutservice
     type: stateless
     critical: true
-    health: tcp://checkoutservice:5050
+    health: tcp://localhost:22007
     faults: [crash, latency, timeout]
   - name: recommendationservice
     container: recommendationservice
     type: stateless
     critical: false
-    health: tcp://recommendationservice:8080
+    health: tcp://localhost:22008
     faults: [crash, latency]
   - name: adservice
     container: adservice
     type: stateless
     critical: false
-    health: tcp://adservice:9555
+    health: tcp://localhost:22009
     faults: [crash, latency]
   - name: redis-cart
     container: redis-cart
     type: stateful
     critical: true
-    health: tcp://redis-cart:6379
+    health: tcp://localhost:22010
     faults: [connection_failure]
 declared_dependencies:
   - from: frontend

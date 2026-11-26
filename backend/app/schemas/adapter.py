@@ -6,11 +6,12 @@ from app.schemas.base import ContractModel
 from app.schemas.enums import FaultType, ServiceType
 
 SLUG_PATTERN = r"^[a-z0-9][a-z0-9_-]*$"
+HEALTH_PREFIXES = ("/", "tcp://", "http://", "https://")
 
 
 class AdapterService(ContractModel):
     name: str = Field(pattern=SLUG_PATTERN)
-    container: str = Field(min_length=1)
+    container: str = Field(min_length=1)  # docker compose service name
     type: ServiceType
     critical: bool = False
     health: str | None = None
@@ -18,9 +19,11 @@ class AdapterService(ContractModel):
 
     @field_validator("health")
     @classmethod
-    def health_must_be_path_or_tcp(cls, v: str | None) -> str | None:
-        if v is not None and not (v.startswith("/") or v.startswith("tcp://")):
-            raise ValueError("health must be an HTTP path starting with '/' or a 'tcp://host:port' address")
+    def health_must_be_probeable(cls, v: str | None) -> str | None:
+        if v is not None and not v.startswith(HEALTH_PREFIXES):
+            raise ValueError(
+                "health must be an HTTP path starting with '/', an http(s):// URL, or a 'tcp://host:port' address"
+            )
         return v
 
 
@@ -36,6 +39,7 @@ class AdapterFile(ContractModel):
     app: str = Field(pattern=SLUG_PATTERN)
     version: Literal[1] = 1
     description: str | None = None
+    compose_project: str | None = Field(default=None, pattern=SLUG_PATTERN)
     services: list[AdapterService] = Field(min_length=1)
     declared_dependencies: list[DeclaredDependency] = Field(default_factory=list)
 
