@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://sentinel:sentinel@localhost:5432/sentinel"
     cors_origins: str = "http://localhost:5173"
+    toxiproxy_url: str = "http://localhost:8474"
 
     @property
     def cors_origin_list(self) -> list[str]:
