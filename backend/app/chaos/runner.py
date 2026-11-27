@@ -1,15 +1,19 @@
 """Starts and clears experiments: asks the gateway first, then applies the fault."""
 
+import logging
 import uuid
 
 from sqlalchemy.orm import Session
 
-from app import gateway
+from app import events, gateway
 from app.chaos import docker_ctl, toxiproxy
 from app.errors import AppError
+from app.events import EventPublishError
 from app.repository import experiments as repo
-from app.schemas import Actor, ActionType, FaultType, GatewayRequest, Verdict
+from app.schemas import ActionType, Actor, EventType, FaultType, GatewayRequest, Verdict
 from app.schemas.experiments import ExperimentCreate, ExperimentRecord
+
+log = logging.getLogger(__name__)
 
 TOOL_FOR_FAULT: dict[FaultType, str] = {
     FaultType.crash: "inject_crash",
@@ -34,7 +38,7 @@ def _clean_parameters(fault: FaultType, params: dict) -> dict:
         cleaned["latency_ms"] = _positive_int(params, "latency_ms", 1000)
     duration = _positive_int(params, "duration_s")
     if duration is not None:
-        cleaned["duration_s"] = duration  # recorded only; automatic expiry is not built yet
+        cleaned["duration_s"] = duration  # recorded only; automatic expiry arrives in Step 7b
     return cleaned
 
 
@@ -84,6 +88,23 @@ def _service_config(adapter: dict, service: str) -> dict:
     raise AppError(422, "validation_error", f"Unknown service '{service}'")
 
 
+def _publish_experiment_event(event_type: EventType, record: ExperimentRecord) -> None:
+    try:
+        events.publish(
+            record.application_id,
+            event_type,
+            Actor.human,
+            {
+                "experiment_id": str(record.id),
+                "service": record.service,
+                "fault_type": record.fault_type.value,
+            },
+        )
+    except EventPublishError:
+        # The fault is already applied (or reverted) and recorded, so do not fail the request.
+        log.exception("could not publish %s for experiment %s", event_type.value, record.id)
+
+
 def start_experiment(db: Session, body: ExperimentCreate) -> ExperimentRecord:
     adapter = repo.get_adapter(db, body.application_id)
     svc = _service_config(adapter, body.service)
@@ -97,9 +118,11 @@ def start_experiment(db: Session, body: ExperimentCreate) -> ExperimentRecord:
 
     experiment_id = uuid.uuid4()
     _apply(body.fault_type, experiment_id, svc, adapter.get("compose_project"), params)
-    return repo.insert_experiment(
+    record = repo.insert_experiment(
         db, experiment_id, body.application_id, body.service, body.fault_type.value, params, "dashboard"
     )
+    _publish_experiment_event(EventType.experiment_started, record)
+    return record
 
 
 def clear_experiment(db: Session, experiment_id: uuid.UUID) -> ExperimentRecord:
@@ -112,4 +135,6 @@ def clear_experiment(db: Session, experiment_id: uuid.UUID) -> ExperimentRecord:
 
     _ask_gateway("clear_fault", ActionType.clear_fault, exp.service, {"experiment_id": str(exp.id)})
     _revert(exp.fault_type, exp.id, svc, adapter.get("compose_project"))
-    return repo.mark_ended(db, exp.id)
+    record = repo.mark_ended(db, exp.id)
+    _publish_experiment_event(EventType.experiment_ended, record)
+    return record
