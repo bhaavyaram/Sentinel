@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     toxiproxy_url: str = "http://localhost:8474"
 
+    # Background workers (health monitor, experiment expiry). Tests turn this off.
+    background_workers: bool = True
+    health_interval_s: float = 3.0
+    expiry_interval_s: float = 1.0
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

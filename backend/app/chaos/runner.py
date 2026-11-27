@@ -22,6 +22,8 @@ TOOL_FOR_FAULT: dict[FaultType, str] = {
     FaultType.connection_failure: "break_db_connection",
 }
 
+REASON_DURATION_EXPIRED = "duration_expired"
+
 
 def _positive_int(params: dict, key: str, default: int | None = None) -> int | None:
     value = params.get(key, default)
@@ -38,20 +40,22 @@ def _clean_parameters(fault: FaultType, params: dict) -> dict:
         cleaned["latency_ms"] = _positive_int(params, "latency_ms", 1000)
     duration = _positive_int(params, "duration_s")
     if duration is not None:
-        cleaned["duration_s"] = duration  # recorded only; automatic expiry arrives in Step 7b
+        cleaned["duration_s"] = duration  # the expiry worker clears the experiment after this
     return cleaned
 
 
-def _ask_gateway(tool: str, action: ActionType, service: str, parameters: dict) -> None:
+def _ask_gateway(tool: str, action: ActionType, service: str, parameters: dict, caller: Actor) -> None:
     request = GatewayRequest(
         request_id=uuid.uuid4(),
         incident_id=None,
-        caller=Actor.human,
+        caller=caller,
         tool=tool,
         action=action,
         target_service=service,
         parameters=parameters,
-        initiated_by_human=True,  # these routes are only called from the dashboard
+        # Always true here: a person asked for this experiment from the dashboard.
+        # For expiry that same request is simply completing (see the reason parameter).
+        initiated_by_human=True,
         dry_run=False,
     )
     decision = gateway.submit(request)
@@ -88,18 +92,18 @@ def _service_config(adapter: dict, service: str) -> dict:
     raise AppError(422, "validation_error", f"Unknown service '{service}'")
 
 
-def _publish_experiment_event(event_type: EventType, record: ExperimentRecord) -> None:
+def _publish_experiment_event(
+    event_type: EventType, record: ExperimentRecord, actor: Actor, reason: str | None = None
+) -> None:
+    payload = {
+        "experiment_id": str(record.id),
+        "service": record.service,
+        "fault_type": record.fault_type.value,
+    }
+    if reason is not None:
+        payload["reason"] = reason
     try:
-        events.publish(
-            record.application_id,
-            event_type,
-            Actor.human,
-            {
-                "experiment_id": str(record.id),
-                "service": record.service,
-                "fault_type": record.fault_type.value,
-            },
-        )
+        events.publish(record.application_id, event_type, actor, payload)
     except EventPublishError:
         # The fault is already applied (or reverted) and recorded, so do not fail the request.
         log.exception("could not publish %s for experiment %s", event_type.value, record.id)
@@ -114,18 +118,25 @@ def start_experiment(db: Session, body: ExperimentCreate) -> ExperimentRecord:
         )
     params = _clean_parameters(body.fault_type, body.parameters)
 
-    _ask_gateway(TOOL_FOR_FAULT[body.fault_type], ActionType.inject_fault, body.service, params)
+    _ask_gateway(
+        TOOL_FOR_FAULT[body.fault_type], ActionType.inject_fault, body.service, params, Actor.human
+    )
 
     experiment_id = uuid.uuid4()
     _apply(body.fault_type, experiment_id, svc, adapter.get("compose_project"), params)
     record = repo.insert_experiment(
         db, experiment_id, body.application_id, body.service, body.fault_type.value, params, "dashboard"
     )
-    _publish_experiment_event(EventType.experiment_started, record)
+    _publish_experiment_event(EventType.experiment_started, record, Actor.human)
     return record
 
 
-def clear_experiment(db: Session, experiment_id: uuid.UUID) -> ExperimentRecord:
+def clear_experiment(
+    db: Session,
+    experiment_id: uuid.UUID,
+    caller: Actor = Actor.human,
+    reason: str | None = None,
+) -> ExperimentRecord:
     exp = repo.get_experiment(db, experiment_id)
     if exp.ended_at is not None:
         raise AppError(409, "experiment_already_cleared", "This experiment was already cleared")
@@ -133,8 +144,11 @@ def clear_experiment(db: Session, experiment_id: uuid.UUID) -> ExperimentRecord:
     adapter = repo.get_adapter(db, exp.application_id)
     svc = _service_config(adapter, exp.service)
 
-    _ask_gateway("clear_fault", ActionType.clear_fault, exp.service, {"experiment_id": str(exp.id)})
+    parameters: dict = {"experiment_id": str(exp.id)}
+    if reason is not None:
+        parameters["reason"] = reason
+    _ask_gateway("clear_fault", ActionType.clear_fault, exp.service, parameters, caller)
     _revert(exp.fault_type, exp.id, svc, adapter.get("compose_project"))
     record = repo.mark_ended(db, exp.id)
-    _publish_experiment_event(EventType.experiment_ended, record)
+    _publish_experiment_event(EventType.experiment_ended, record, caller, reason)
     return record

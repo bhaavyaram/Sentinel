@@ -1,13 +1,35 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import applications, experiments, health, ingest, ws
+from app.chaos import expiry
 from app.config import settings
 from app.errors import AppError
+from app.monitoring import health as health_monitor
+from app.workers import PeriodicWorker
 
-app = FastAPI(title="SENTINEL", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    workers: list[PeriodicWorker] = []
+    if settings.background_workers:
+        workers = [
+            PeriodicWorker("health-monitor", settings.health_interval_s, health_monitor.sweep_once),
+            PeriodicWorker("experiment-expiry", settings.expiry_interval_s, expiry.clear_expired),
+        ]
+        for worker in workers:
+            worker.start()
+    yield
+    for worker in workers:
+        worker.stop()
+
+
+app = FastAPI(title="SENTINEL", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

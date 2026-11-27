@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.errors import AppError
+from app.monitoring import state
 from app.schemas import AdapterFile
 from app.schemas.applications import (
     ApplicationMap,
@@ -109,7 +110,7 @@ def get_map(db: Session, app_id: uuid.UUID) -> ApplicationMap:
 
     return ApplicationMap(
         application_id=app_id,
-        nodes=[MapNode(**s, health=ServiceHealth.unknown) for s in services],
+        nodes=[MapNode(**s, health=state.tracker.get(app_id, s["name"])) for s in services],
         edges=[MapEdge(**e) for e in edges],
     )
 
