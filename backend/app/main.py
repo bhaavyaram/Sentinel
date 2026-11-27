@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import applications, experiments, health, ingest, ws
+from app.api import applications, experiments, health, ingest, policies, ws
 from app.chaos import expiry
 from app.config import settings
 from app.errors import AppError
@@ -44,6 +44,7 @@ app.include_router(health.router, prefix=API_PREFIX)
 app.include_router(applications.router, prefix=API_PREFIX)
 app.include_router(experiments.router, prefix=API_PREFIX)
 app.include_router(ingest.router, prefix=API_PREFIX)
+app.include_router(policies.router, prefix=API_PREFIX)
 app.include_router(ws.router, prefix=API_PREFIX)
 
 
