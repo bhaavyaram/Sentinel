@@ -342,3 +342,7 @@ def get_dependencies(application_id: UUID, service: str) -> dict[str, Any]:
     upstream = sorted({source for source, target in edges if target == service})
     downstream = sorted({target for source, target in edges if source == service})
     return {"upstream": upstream, "downstream": downstream}
+
+def list_services(application_id: UUID) -> list[str]:
+    """Service names of the application (agents use it to validate what a model returns)."""
+    return sorted(_known_services(application_id))
